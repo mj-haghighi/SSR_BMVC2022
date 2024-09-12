@@ -8,6 +8,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from PIL import ImageFilter
+from collections import deque
 
 
 def seed_everything(seed: int):
@@ -199,3 +200,25 @@ class GaussianBlur(object):
         sigma = random.uniform(self.sigma[0], self.sigma[1])
         x = x.filter(ImageFilter.GaussianBlur(radius=sigma))
         return x
+
+
+
+class FixedSizeQueue:
+    def __init__(self, size):
+        self.size = size
+        self.queue = deque(maxlen=size)
+
+    def enqueue(self, item):
+        self.queue.append(item)
+
+    def dequeue(self):
+        if len(self.queue) > 0:
+            return self.queue.popleft()
+        else:
+            return None  # Queue is empty
+
+    def items(self):
+        return list(self.queue)
+
+    def __str__(self):
+        return str(list(self.queue))
