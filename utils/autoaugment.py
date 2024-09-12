@@ -372,7 +372,7 @@ class SubPolicy(object):
             "translatey": np.linspace(0, 150 / 331, 10),
             "rotate": np.linspace(0, 30, 10),
             "color": np.linspace(0.0, 0.9, 10),
-            "posterize": np.round(np.linspace(8, 4, 10), 0).astype(np.int),
+            "posterize": np.round(np.linspace(8, 4, 10), 0).astype(np.int64),
             "solarize": np.linspace(256, 0, 10),
             "contrast": np.linspace(0.0, 0.9, 10),
             "sharpness": np.linspace(0.0, 0.9, 10),
@@ -380,7 +380,7 @@ class SubPolicy(object):
             "autocontrast": [0] * 10,
             "equalize": [0] * 10,
             "invert": [0] * 10,
-            "cutout": np.round(np.linspace(0, 20, 10), 0).astype(np.int),
+            "cutout": np.round(np.linspace(0, 20, 10), 0).astype(np.int64),
         }
 
         # from https://stackoverflow.com/questions/5252170/specify-image-filling-color-when-rotating-in-python-with-pil-and-setting-expand
