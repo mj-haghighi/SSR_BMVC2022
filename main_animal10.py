@@ -8,13 +8,15 @@ from torch.optim import SGD
 from torch.utils.data import Subset
 from tqdm import tqdm
 import torch.nn as nn
+import matplotlib.pyplot as plt
 
 from datasets.dataloader_animal10n import animal_dataset
 from torchvision.models import vgg19_bn
 from utils import *
+from utils.funcs import get_current_knn_k
 
 parser = argparse.ArgumentParser('Train with ANIMAL-10N dataset')
-parser.add_argument('--dataset_path', default='~/ANIMAL-10N', help='dataset path')
+parser.add_argument('--dataset_path', default='ANIMAL-10N', help='dataset path')
 
 # model settings
 parser.add_argument('--lambda_fc', default=1.0, type=float, help='weight of feature consistency loss (default: 1.0)')
@@ -32,6 +34,10 @@ parser.add_argument('--seed', default=3047, type=int, help='seed for initializin
 parser.add_argument('--gpuid', default='0', type=str, help='Selected GPU (default: "0")')
 parser.add_argument('--entity', type=str, help='Wandb user entity')
 parser.add_argument('--run_path', type=str, help='run path containing all results')
+parser.add_argument('--decrease_knn_k_enable', type=bool, default=True, help='decrease_knn_k_enable')
+parser.add_argument('--knn_k_decrease_rate', type=float, default=1.0025, help='knn_k_decrease_rate')
+parser.add_argument('--min_knn_k', type=int, default=100, help='min_knn_k')
+parser.add_argument('--ca_warm_restarts_enabled', type=bool, default=True, help='ca_warm_restarts_enabled')
 
 
 def train(labeled_trainloader, modified_label, all_trainloader, encoder, classifier, proj_head, pred_head, optimizer, epoch, args):
@@ -45,10 +51,10 @@ def train(labeled_trainloader, modified_label, all_trainloader, encoder, classif
     all_bar = tqdm(all_trainloader)
     for batch_idx, ([inputs_u1, inputs_u2],  _, _) in enumerate(all_bar):
         try:
-            [inputs_x1, inputs_x2], labels_x, index = labeled_train_iter.next()
+            [inputs_x1, inputs_x2], labels_x, index = next(labeled_train_iter)
         except:
             labeled_train_iter = iter(labeled_trainloader)
-            [inputs_x1, inputs_x2], labels_x, index = labeled_train_iter.next()
+            [inputs_x1, inputs_x2], labels_x, index = next(labeled_train_iter)
 
         # cross-entropy training with mixup
         batch_size = inputs_x1.size(0)
@@ -108,7 +114,7 @@ def test(testloader, encoder, classifier, epoch):
     return accuracy.avg
 
 
-def evaluate(dataloader, encoder, classifier, args, noisy_label):
+def evaluate(dataloader, encoder, classifier, args, noisy_label, knn_k):
     encoder.eval()
     classifier.eval()
     feature_bank = []
@@ -135,14 +141,14 @@ def evaluate(dataloader, encoder, classifier, args, noisy_label):
         modified_label[conf_id] = his_label[conf_id]
 
         ################################### sample selection ###################################
-        prediction_knn = weighted_knn(feature_bank, feature_bank, modified_label, args.num_classes, args.k, 10)  # temperature in weighted KNN
+        prediction_knn = weighted_knn(feature_bank, feature_bank, modified_label, args.num_classes, knn_k, 10)  # temperature in weighted KNN
         vote_y = torch.gather(prediction_knn, 1, modified_label.view(-1, 1)).squeeze()
         vote_max = prediction_knn.max(dim=1)[0]
         right_score = vote_y / vote_max
         clean_id = torch.where(right_score >= args.theta_s)[0]
         noisy_id = torch.where(right_score < args.theta_s)[0]
 
-    return clean_id, noisy_id, modified_label
+    return clean_id, noisy_id, modified_label, conf_id
 
 
 def main():
@@ -226,15 +232,18 @@ def main():
     optimizer = SGD([{'params': encoder.parameters()}, {'params': classifier.parameters()}, {'params': proj_head.parameters()}, {'params': pred_head.parameters()}],
                     lr=args.lr, weight_decay=args.weight_decay, momentum=args.momentum)
     scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[50, 100], gamma=0.1)
-
+    warmup_scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=5, T_mult=1, eta_min=args.lr / 5, last_epoch=-1)
+    endup_schedulerx = None
+    warmup_epochs = 10
     acc_logs = open(f'animal10n/{args.run_path}/acc.txt', 'w')
     save_config(args, f'animal10n/{args.run_path}')
     print('Train args: \n', args)
     best_acc = 0
+    knn_k = args.k
 
     ################################ Training loop ###########################################
     for i in range(args.epochs):
-        clean_id, noisy_id, modified_label = evaluate(eval_loader, encoder, classifier, args, noisy_label)
+        clean_id, noisy_id, modified_label, relabel_ids = evaluate(eval_loader, encoder, classifier, args, noisy_label, knn_k)
 
         clean_subset = Subset(train_data, clean_id.cpu())
         sampler = ClassBalancedSampler(labels=modified_label[clean_id], num_classes=args.num_classes)
@@ -243,7 +252,23 @@ def main():
         train(labeled_loader, modified_label, all_loader, encoder, classifier, proj_head, pred_head, optimizer, i, args)
 
         cur_acc = test(test_loader, encoder, classifier, i)
-        scheduler.step()
+
+        if (i < 10) and (args.ca_warm_restarts_enabled == True):
+            warmup_scheduler.step()
+        elif (i > 0.9 * args.epochs) and (args.ca_warm_restarts_enabled == True):
+            if endup_schedulerx == None:
+                optimizer = torch.optim.SGD(
+                    [{'params': encoder.parameters()}, {'params': classifier.parameters()}, {'params': proj_head.parameters()}, {'params': pred_head.parameters()}]
+                    , lr=optimizer.param_groups[0]["lr"] * 2, weight_decay=args.weight_decay, momentum=args.momentum)
+                endup_schedulerx = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=5, T_mult=1, eta_min=0.00001, last_epoch=-1)
+            endup_schedulerx.step()
+        else:
+            scheduler.step()
+
+        if args.decrease_knn_k_enable == True:
+            knn_k = get_current_knn_k(args.k, i, args.knn_k_decrease_rate, args.min_knn_k)
+
+        logger.log({'knn_k': knn_k, 'clean samples': len(clean_subset), 'lr': optimizer.param_groups[0]["lr"],  'relabeled samples': len(relabel_ids)})
         if cur_acc > best_acc:
             best_acc = cur_acc
             save_checkpoint({
