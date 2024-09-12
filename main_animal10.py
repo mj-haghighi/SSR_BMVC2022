@@ -13,32 +13,33 @@ import matplotlib.pyplot as plt
 from datasets.dataloader_animal10n import animal_dataset
 from torchvision.models import vgg19_bn
 from utils import *
-from utils.funcs import get_current_knn_k
+from utils.funcs import get_current_knn_k, FixedSizeQueue
 
 parser = argparse.ArgumentParser('Train with ANIMAL-10N dataset')
 parser.add_argument('--dataset_path', default='ANIMAL-10N', help='dataset path')
 
 # model settings
-parser.add_argument('--lambda_fc', default=1.0, type=float, help='weight of feature consistency loss (default: 1.0)')
-parser.add_argument('--theta_s', default=1.0, type=float, help='threshold for voted correct samples (default: 1.0)')
-parser.add_argument('--theta_r', default=0.95, type=float, help='threshold for relabel samples (default: 0.95)')
-parser.add_argument('--k', default=200, type=int, help='neighbors for soft-voting (default: 200)')
+parser.add_argument('--lambda_fc',  default=1.0, type=float, help='weight of feature consistency loss (default: 1.0)')
+parser.add_argument('--theta_s',    default=1.0, type=float, help='threshold for voted correct samples (default: 1.0)')
+parser.add_argument('--theta_r',    default=0.7, type=float, help='threshold for relabel samples (default: 0.95)')
+parser.add_argument('--theta_ce',   default=0.95, type=float, help='threshold for clean extended samples (default: 0.95)')
+parser.add_argument('--k',          default=200, type=int, help='neighbors for soft-voting (default: 200)')
 
 # train settings
-parser.add_argument('--epochs', default=150, type=int, metavar='N', help='number of total epochs to run (default: 200)')
-parser.add_argument('--batch_size', default=128, type=int, help='mini-batch size (default: 128)')
-parser.add_argument('--lr', default=0.02, type=float, help='initial learning rate (default: 0.02)')
-parser.add_argument('--momentum', default=0.9, type=float, metavar='M', help='momentum of SGD solver (default: 0.9)')
-parser.add_argument('--weight_decay', default=5e-4, type=float, help='weight decay (default: 5e-4)')
-parser.add_argument('--seed', default=3047, type=int, help='seed for initializing training. (default: 3047)')
-parser.add_argument('--gpuid', default='0', type=str, help='Selected GPU (default: "0")')
+parser.add_argument('--epochs',         default=150, type=int, metavar='N', help='number of total epochs to run (default: 200)')
+parser.add_argument('--batch_size',     default=128, type=int, help='mini-batch size (default: 128)')
+parser.add_argument('--lr',             default=0.02, type=float, help='initial learning rate (default: 0.02)')
+parser.add_argument('--momentum',       default=0.9, type=float, metavar='M', help='momentum of SGD solver (default: 0.9)')
+parser.add_argument('--weight_decay',   default=5e-4, type=float, help='weight decay (default: 5e-4)')
+parser.add_argument('--seed',           default=3047, type=int, help='seed for initializing training. (default: 3047)')
+parser.add_argument('--gpuid',          default='0', type=str, help='Selected GPU (default: "0")')
 parser.add_argument('--entity', type=str, help='Wandb user entity')
 parser.add_argument('--run_path', type=str, help='run path containing all results')
-parser.add_argument('--decrease_knn_k_enable', type=bool, default=True, help='decrease_knn_k_enable')
-parser.add_argument('--knn_k_decrease_rate', type=float, default=1.0025, help='knn_k_decrease_rate')
-parser.add_argument('--min_knn_k', type=int, default=100, help='min_knn_k')
-parser.add_argument('--ca_warm_restarts_enabled', type=bool, default=True, help='ca_warm_restarts_enabled')
-
+parser.add_argument('--extend_clean_knn_samples_enable',     default=True, type=bool,  help='extend_clean_knn_samples_enable')
+parser.add_argument('--decrease_knn_k_enable', type=bool,    default=False, help='decrease_knn_k_enable')
+parser.add_argument('--knn_k_decrease_rate', type=float,     default=1.0025, help='knn_k_decrease_rate')
+parser.add_argument('--min_knn_k', type=int,                 default=200, help='min_knn_k')
+parser.add_argument('--ca_warm_restarts_enabled', type=bool, default=False, help='ca_warm_restarts_enabled')
 
 def train(labeled_trainloader, modified_label, all_trainloader, encoder, classifier, proj_head, pred_head, optimizer, epoch, args):
     encoder.train()
@@ -114,11 +115,12 @@ def test(testloader, encoder, classifier, epoch):
     return accuracy.avg
 
 
-def evaluate(dataloader, encoder, classifier, args, noisy_label, knn_k):
+def evaluate(dataloader, encoder, classifier, args, human_labels, knn_k):
     encoder.eval()
     classifier.eval()
     feature_bank = []
     prediction = []
+    targets = []
 
     ################################### feature extraction ###################################
     with torch.no_grad():
@@ -129,17 +131,24 @@ def evaluate(dataloader, encoder, classifier, args, noisy_label, knn_k):
             feature_bank.append(feature)
             res = classifier(feature)
             prediction.append(res)
+            targets.append(target)
+        targets = torch.cat(targets, dim=0)
         feature_bank = F.normalize(torch.cat(feature_bank, dim=0), dim=1)
-
         ################################### sample relabelling ###################################
         prediction_cls = torch.softmax(torch.cat(prediction, dim=0), dim=1)
         his_score, his_label = prediction_cls.max(1)
-
+        human_labels_score = prediction_cls[torch.arange(prediction_cls.size()[0]), targets]
+        human_labels_score_window.enqueue(human_labels_score)
+        human_labels_score_confidence = torch.mean(torch.stack(human_labels_score_window.items()), dim=0)
         print(f'Prediction track: mean: {his_score.mean()} max: {his_score.max()} min: {his_score.min()}')
-        conf_id = torch.where(his_score > args.theta_r)[0]
-        modified_label = torch.clone(noisy_label).detach()
+
+        conf_id = torch.where((his_score > args.theta_r) & (human_labels_score_confidence < (1./args.num_classes)))[0]
+        modified_score = torch.clone(human_labels_score).detach()
+        modified_label = torch.clone(human_labels).detach()
+        modified_score[conf_id] = his_score[conf_id]
         modified_label[conf_id] = his_label[conf_id]
 
+        relabeled_human_labels_score_window.enqueue(modified_score)
         ################################### sample selection ###################################
         prediction_knn = weighted_knn(feature_bank, feature_bank, modified_label, args.num_classes, knn_k, 10)  # temperature in weighted KNN
         vote_y = torch.gather(prediction_knn, 1, modified_label.view(-1, 1)).squeeze()
@@ -147,8 +156,9 @@ def evaluate(dataloader, encoder, classifier, args, noisy_label, knn_k):
         right_score = vote_y / vote_max
         clean_id = torch.where(right_score >= args.theta_s)[0]
         noisy_id = torch.where(right_score < args.theta_s)[0]
-
-    return clean_id, noisy_id, modified_label, conf_id
+        relabeled_human_labels_score_confidence = torch.mean(torch.stack(relabeled_human_labels_score_window.items()), axis=0)
+        clean_id_extended = torch.where(relabeled_human_labels_score_confidence >= args.theta_ce)[0]
+    return clean_id, clean_id_extended, noisy_id, modified_label, conf_id
 
 
 def main():
@@ -159,6 +169,11 @@ def main():
 
     os.environ['CUDA_VISIBLE_DEVICES'] = args.gpuid
     global logger
+    global relabeled_human_labels_score_window
+    global human_labels_score_window
+    relabeled_human_labels_score_window = FixedSizeQueue(10)
+    human_labels_score_window = FixedSizeQueue(10)
+
     logger = wandb.init(project='animal10n', entity=args.entity, name=args.run_path)
     logger.config.update(args)
 
@@ -189,7 +204,7 @@ def main():
     all_data = animal_dataset(root=args.dataset_path, transform=MixTransform(strong_transform, weak_transform, 1), mode='train')
 
     # noisy labels
-    noisy_label = torch.tensor(eval_data.targets).cuda()
+    human_labels = torch.tensor(eval_data.targets).cuda()
 
     test_loader = torch.utils.data.DataLoader(test_data, batch_size=args.batch_size, shuffle=False, num_workers=4, pin_memory=True)
     eval_loader = torch.utils.data.DataLoader(eval_data, batch_size=args.batch_size, shuffle=False, num_workers=4, pin_memory=True)
@@ -243,10 +258,19 @@ def main():
 
     ################################ Training loop ###########################################
     for i in range(args.epochs):
-        clean_id, noisy_id, modified_label, relabel_ids = evaluate(eval_loader, encoder, classifier, args, noisy_label, knn_k)
+        clean_id, clean_id_extended, noisy_id, modified_label, relabel_ids = evaluate(eval_loader, encoder, classifier, args, human_labels, knn_k)
 
-        clean_subset = Subset(train_data, clean_id.cpu())
-        sampler = ClassBalancedSampler(labels=modified_label[clean_id], num_classes=args.num_classes)
+        if args.extend_clean_knn_samples_enable == True:
+            union_set = torch.unique(torch.cat((clean_id, clean_id_extended)))
+            number_of_extended_samples = len(union_set) - len(clean_id)
+            logger.log({'number_of_extended_samples': number_of_extended_samples,
+                        'number_of_union_set_samples': len(union_set)})
+            clean_subset = Subset(train_data, union_set.cpu())
+            sampler = ClassBalancedSampler(labels=modified_label[union_set], num_classes=args.num_classes)
+        else:
+            clean_subset = Subset(train_data, clean_id.cpu())
+            sampler = ClassBalancedSampler(labels=modified_label[clean_id], num_classes=args.num_classes)
+
         labeled_loader = torch.utils.data.DataLoader(clean_subset, batch_size=args.batch_size, sampler=sampler, num_workers=4, drop_last=True)
 
         train(labeled_loader, modified_label, all_loader, encoder, classifier, proj_head, pred_head, optimizer, i, args)
