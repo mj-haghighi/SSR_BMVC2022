@@ -31,6 +31,10 @@ def D(p, z, version='simplified'):  # negative cosine similarity
     else:
         raise Exception
 
+def get_current_knn_k(init_k, current_epoch, rate, min_knn_k):
+    k = init_k - (current_epoch * (math.pow(rate, current_epoch)))
+    k = max(k, min_knn_k)
+    return int(k)
 
 def knn_predict(feature, feature_bank, feature_labels, classes, knn_k):
     # compute cos similarity between each feature vector and feature bank ---> [B, N]
