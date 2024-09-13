@@ -20,7 +20,8 @@ def select_sample_based_on_modified_labales_confidence(feature_bank, labels, arg
     noisy_id = torch.where(right_score < args.theta_s)[0]
     
     clean_id_extended = torch.tensor([], dtype=torch.int64).cuda()
-    if len(relabeled_human_labels_score_window.items()) > args.window_size:
+    if len(relabeled_human_labels_score_window.items()) >= args.window_size:
+        print('window reach in sample selection')
         relabeled_human_labels_score_confidence = torch.mean(torch.stack(relabeled_human_labels_score_window.items()), axis=0)
         clean_id_extended = torch.where(relabeled_human_labels_score_confidence >= args.theta_ce)[0]
 

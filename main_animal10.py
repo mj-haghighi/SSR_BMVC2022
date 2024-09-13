@@ -24,12 +24,12 @@ parser.add_argument('--dataset_path', default='ANIMAL-10N', help='dataset path')
 # model settings
 parser.add_argument('--lambda_fc',  default=1.0, type=float, help='weight of feature consistency loss (default: 1.0)')
 parser.add_argument('--theta_s',    default=1.0, type=float, help='threshold for voted correct samples (default: 1.0)')
-parser.add_argument('--theta_r',    default=0.95, type=float, help='threshold for relabel samples (default: 0.95)')
-parser.add_argument('--theta_ce',   default=0.95, type=float, help='threshold for clean extended samples (default: 0.95)')
+parser.add_argument('--theta_r',    default=0.9, type=float, help='threshold for relabel samples (default: 0.95)')
+parser.add_argument('--theta_ce',   default=0.9, type=float, help='threshold for clean extended samples (default: 0.95)')
 parser.add_argument('--k',          default=200, type=int, help='neighbors for soft-voting (default: 200)')
 
 # train settings
-parser.add_argument('--window_size',    default=20, type=int, metavar='N', help='number of total epochs to run (default: 5)')
+parser.add_argument('--window_size',    default=5, type=int, metavar='N', help='window_size (default: 5)')
 parser.add_argument('--epochs',         default=150, type=int, metavar='N', help='number of total epochs to run (default: 200)')
 parser.add_argument('--batch_size',     default=128, type=int, help='mini-batch size (default: 128)')
 parser.add_argument('--lr',             default=0.02, type=float, help='initial learning rate (default: 0.02)')
@@ -130,7 +130,6 @@ def evaluate(dataloader, encoder, classifier, args, human_labels, knn_k,
     classifier.eval()
     feature_bank = []
     prediction = []
-    # targets = []
 
     ################################### feature extraction ###################################
     with torch.no_grad():
@@ -141,12 +140,9 @@ def evaluate(dataloader, encoder, classifier, args, human_labels, knn_k,
             feature_bank.append(feature)
             res = classifier(feature)
             prediction.append(res)
-            # targets.append(target)
-        # targets = torch.cat(targets, dim=0)
         feature_bank = F.normalize(torch.cat(feature_bank, dim=0), dim=1)
         prediction_cls = torch.softmax(torch.cat(prediction, dim=0), dim=1)
         ################################### sample relabelling ###################################
-        # his_score, pred_label = prediction_cls.max(1)
         modified_label, modified_score, changed_id = relabel_sample(
                                         prediction_cls, human_labels, args,
                                         model_prediction_score_window,
@@ -265,12 +261,27 @@ def main():
             union_set = torch.unique(torch.cat((clean_id, clean_id_extended)))
             number_of_extended_samples = len(union_set) - len(clean_id)
             logger.log({'number_of_extended_samples': number_of_extended_samples,
-                        'number_of_union_set_samples': len(union_set)})
+                        'number_of_union_set_samples': len(union_set),
+                        'number_of_extended_candidates': len(clean_id_extended)})
+
             clean_subset = Subset(train_data, union_set.cpu())
             sampler = ClassBalancedSampler(labels=modified_label[union_set], num_classes=args.num_classes)
         else:
             clean_subset = Subset(train_data, clean_id.cpu())
             sampler = ClassBalancedSampler(labels=modified_label[clean_id], num_classes=args.num_classes)
+
+        logger.log({
+            'model_prediction_score_window_mean_max': torch.max(torch.mean(torch.stack(model_prediction_score_window.items()), axis=0)).detach().cpu().item(),
+            'relabeled_human_labels_score_window_mean_max': torch.max(torch.mean(torch.stack(relabeled_human_labels_score_window.items()), axis=0)).detach().cpu().item(),
+            'human_labels_score_window_mean_max': torch.max(torch.mean(torch.stack(human_labels_score_window.items()), axis=0)).detach().cpu().item(),
+            'model_prediction_score_window_mean_min': torch.min(torch.mean(torch.stack(model_prediction_score_window.items()), axis=0)).detach().cpu().item(),
+            'relabeled_human_labels_score_window_mean_min': torch.min(torch.mean(torch.stack(relabeled_human_labels_score_window.items()), axis=0)).detach().cpu().item(),
+            'human_labels_score_window_mean_min': torch.min(torch.mean(torch.stack(human_labels_score_window.items()), axis=0)).detach().cpu().item(),
+            'model_prediction_score_window_len': len(model_prediction_score_window.items()),
+            'relabeled_human_labels_score_window_len': len(relabeled_human_labels_score_window.items()),
+            'human_labels_score_window_len': len(human_labels_score_window.items()),
+        })
+
 
         labeled_loader = torch.utils.data.DataLoader(clean_subset, batch_size=args.batch_size, sampler=sampler, num_workers=4, drop_last=True)
 

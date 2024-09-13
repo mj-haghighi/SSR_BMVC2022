@@ -33,14 +33,15 @@ def relabel_samples_based_on_model_confidence(
     human_labels_score = prediction_cls[torch.arange(pred_score.size()[0]), human_labels]
     human_labels_score_window.enqueue(human_labels_score)
     conf_id = torch.tensor([], dtype=torch.int64)
-    if len(model_prediction_score_window.items()) > args.window_size:
+    if len(model_prediction_score_window.items()) >= args.window_size:
+        print('window reach in relabeling')
         human_labels_score_confidence = torch.mean(torch.stack(human_labels_score_window.items()), dim=0)
         model_prediction_score_confidence = torch.mean(torch.stack(model_prediction_score_window.items()), dim=0)
-        conf_id = torch.where((model_prediction_score_confidence > args.theta_r) & (human_labels_score_confidence < (1-args.theta_r)))[0]
+        conf_id = torch.where((model_prediction_score_confidence > args.theta_r) & (human_labels_score_confidence < (1.0 / 10)))[0]
         modified_score = torch.clone(human_labels_score).detach()
         modified_label = torch.clone(human_labels).detach()
         modified_score[conf_id] = pred_score[conf_id]
         modified_label[conf_id] = pred_label[conf_id]
-        return modified_label, modified_score, human_labels_score, conf_id
+        return modified_label, modified_score, conf_id
 
     return human_labels, human_labels_score ,conf_id
