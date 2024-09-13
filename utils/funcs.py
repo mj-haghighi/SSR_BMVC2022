@@ -222,3 +222,11 @@ class FixedSizeQueue:
 
     def __str__(self):
         return str(list(self.queue))
+
+
+class RelabelingStrategy:
+    MODEL_CONFIDENCE = "model_confidence"
+
+
+class ExtendedSampleingStrategy:
+    RELABELD_CONFIDENCE = "relabeld_confidence"

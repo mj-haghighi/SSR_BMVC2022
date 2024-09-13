@@ -14,6 +14,9 @@ from datasets.dataloader_animal10n import animal_dataset
 from torchvision.models import vgg19_bn
 from utils import *
 from utils.funcs import get_current_knn_k, FixedSizeQueue
+from utils.relabeling import relabel_sample
+from utils.sample_selection import  select_extended_samples
+
 
 parser = argparse.ArgumentParser('Train with ANIMAL-10N dataset')
 parser.add_argument('--dataset_path', default='ANIMAL-10N', help='dataset path')
@@ -21,11 +24,12 @@ parser.add_argument('--dataset_path', default='ANIMAL-10N', help='dataset path')
 # model settings
 parser.add_argument('--lambda_fc',  default=1.0, type=float, help='weight of feature consistency loss (default: 1.0)')
 parser.add_argument('--theta_s',    default=1.0, type=float, help='threshold for voted correct samples (default: 1.0)')
-parser.add_argument('--theta_r',    default=0.7, type=float, help='threshold for relabel samples (default: 0.95)')
+parser.add_argument('--theta_r',    default=0.95, type=float, help='threshold for relabel samples (default: 0.95)')
 parser.add_argument('--theta_ce',   default=0.95, type=float, help='threshold for clean extended samples (default: 0.95)')
 parser.add_argument('--k',          default=200, type=int, help='neighbors for soft-voting (default: 200)')
 
 # train settings
+parser.add_argument('--window_size',    default=20, type=int, metavar='N', help='number of total epochs to run (default: 5)')
 parser.add_argument('--epochs',         default=150, type=int, metavar='N', help='number of total epochs to run (default: 200)')
 parser.add_argument('--batch_size',     default=128, type=int, help='mini-batch size (default: 128)')
 parser.add_argument('--lr',             default=0.02, type=float, help='initial learning rate (default: 0.02)')
@@ -40,6 +44,8 @@ parser.add_argument('--decrease_knn_k_enable', type=bool,    default=False, help
 parser.add_argument('--knn_k_decrease_rate', type=float,     default=1.0025, help='knn_k_decrease_rate')
 parser.add_argument('--min_knn_k', type=int,                 default=200, help='min_knn_k')
 parser.add_argument('--ca_warm_restarts_enabled', type=bool, default=False, help='ca_warm_restarts_enabled')
+parser.add_argument('--relabeling_strategy', type=str, default="model_confidence", help='relabeling_strategy')
+parser.add_argument('--extended_sampleing_strategy', type=str, default="relabeld_confidence", help='relabeling_strategy')
 
 def train(labeled_trainloader, modified_label, all_trainloader, encoder, classifier, proj_head, pred_head, optimizer, epoch, args):
     encoder.train()
@@ -115,12 +121,16 @@ def test(testloader, encoder, classifier, epoch):
     return accuracy.avg
 
 
-def evaluate(dataloader, encoder, classifier, args, human_labels, knn_k):
+def evaluate(dataloader, encoder, classifier, args, human_labels, knn_k,
+    model_prediction_score_window,
+    human_labels_score_window,
+    relabeled_human_labels_score_window
+):
     encoder.eval()
     classifier.eval()
     feature_bank = []
     prediction = []
-    targets = []
+    # targets = []
 
     ################################### feature extraction ###################################
     with torch.no_grad():
@@ -131,34 +141,24 @@ def evaluate(dataloader, encoder, classifier, args, human_labels, knn_k):
             feature_bank.append(feature)
             res = classifier(feature)
             prediction.append(res)
-            targets.append(target)
-        targets = torch.cat(targets, dim=0)
+            # targets.append(target)
+        # targets = torch.cat(targets, dim=0)
         feature_bank = F.normalize(torch.cat(feature_bank, dim=0), dim=1)
-        ################################### sample relabelling ###################################
         prediction_cls = torch.softmax(torch.cat(prediction, dim=0), dim=1)
-        his_score, his_label = prediction_cls.max(1)
-        human_labels_score = prediction_cls[torch.arange(prediction_cls.size()[0]), targets]
-        human_labels_score_window.enqueue(human_labels_score)
-        human_labels_score_confidence = torch.mean(torch.stack(human_labels_score_window.items()), dim=0)
-        print(f'Prediction track: mean: {his_score.mean()} max: {his_score.max()} min: {his_score.min()}')
-
-        conf_id = torch.where((his_score > args.theta_r) & (human_labels_score_confidence < (1./args.num_classes)))[0]
-        modified_score = torch.clone(human_labels_score).detach()
-        modified_label = torch.clone(human_labels).detach()
-        modified_score[conf_id] = his_score[conf_id]
-        modified_label[conf_id] = his_label[conf_id]
-
+        ################################### sample relabelling ###################################
+        # his_score, pred_label = prediction_cls.max(1)
+        modified_label, modified_score, changed_id = relabel_sample(
+                                        prediction_cls, human_labels, args,
+                                        model_prediction_score_window,
+                                        human_labels_score_window,)
+        
         relabeled_human_labels_score_window.enqueue(modified_score)
         ################################### sample selection ###################################
-        prediction_knn = weighted_knn(feature_bank, feature_bank, modified_label, args.num_classes, knn_k, 10)  # temperature in weighted KNN
-        vote_y = torch.gather(prediction_knn, 1, modified_label.view(-1, 1)).squeeze()
-        vote_max = prediction_knn.max(dim=1)[0]
-        right_score = vote_y / vote_max
-        clean_id = torch.where(right_score >= args.theta_s)[0]
-        noisy_id = torch.where(right_score < args.theta_s)[0]
-        relabeled_human_labels_score_confidence = torch.mean(torch.stack(relabeled_human_labels_score_window.items()), axis=0)
-        clean_id_extended = torch.where(relabeled_human_labels_score_confidence >= args.theta_ce)[0]
-    return clean_id, clean_id_extended, noisy_id, modified_label, conf_id
+        clean_id, clean_id_extended, noisy_id = select_extended_samples(
+            feature_bank, human_labels, modified_label, args, knn_k, 
+            human_labels_score_window, relabeled_human_labels_score_window )
+
+    return clean_id, clean_id_extended, noisy_id, modified_label, changed_id
 
 
 def main():
@@ -169,10 +169,9 @@ def main():
 
     os.environ['CUDA_VISIBLE_DEVICES'] = args.gpuid
     global logger
-    global relabeled_human_labels_score_window
-    global human_labels_score_window
-    relabeled_human_labels_score_window = FixedSizeQueue(10)
-    human_labels_score_window = FixedSizeQueue(10)
+    model_prediction_score_window = FixedSizeQueue(args.window_size)
+    relabeled_human_labels_score_window = FixedSizeQueue(args.window_size)
+    human_labels_score_window = FixedSizeQueue(args.window_size)
 
     logger = wandb.init(project='animal10n', entity=args.entity, name=args.run_path)
     logger.config.update(args)
@@ -258,7 +257,9 @@ def main():
 
     ################################ Training loop ###########################################
     for i in range(args.epochs):
-        clean_id, clean_id_extended, noisy_id, modified_label, relabel_ids = evaluate(eval_loader, encoder, classifier, args, human_labels, knn_k)
+        clean_id, clean_id_extended, noisy_id, modified_label, relabel_ids = evaluate(
+            eval_loader, encoder, classifier, args, human_labels, knn_k,
+            model_prediction_score_window, human_labels_score_window, relabeled_human_labels_score_window)
 
         if args.extend_clean_knn_samples_enable == True:
             union_set = torch.unique(torch.cat((clean_id, clean_id_extended)))
