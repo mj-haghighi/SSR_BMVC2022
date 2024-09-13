@@ -22,14 +22,15 @@ parser = argparse.ArgumentParser('Train with ANIMAL-10N dataset')
 parser.add_argument('--dataset_path', default='ANIMAL-10N', help='dataset path')
 
 # model settings
+parser.add_argument('--title',      default="Confidence" ,type=str, help='title for experiment')
 parser.add_argument('--lambda_fc',  default=1.0, type=float, help='weight of feature consistency loss (default: 1.0)')
 parser.add_argument('--theta_s',    default=1.0, type=float, help='threshold for voted correct samples (default: 1.0)')
-parser.add_argument('--theta_r',    default=0.9, type=float, help='threshold for relabel samples (default: 0.95)')
+parser.add_argument('--theta_r',    default=0.95, type=float, help='threshold for relabel samples (default: 0.95)')
 parser.add_argument('--theta_ce',   default=0.9, type=float, help='threshold for clean extended samples (default: 0.95)')
 parser.add_argument('--k',          default=200, type=int, help='neighbors for soft-voting (default: 200)')
 
 # train settings
-parser.add_argument('--window_size',    default=5, type=int, metavar='N', help='window_size (default: 5)')
+parser.add_argument('--window_size',    default=7, type=int, metavar='N', help='window_size (default: 7)')
 parser.add_argument('--epochs',         default=150, type=int, metavar='N', help='number of total epochs to run (default: 200)')
 parser.add_argument('--batch_size',     default=128, type=int, help='mini-batch size (default: 128)')
 parser.add_argument('--lr',             default=0.02, type=float, help='initial learning rate (default: 0.02)')
@@ -161,7 +162,7 @@ def main():
     args = parser.parse_args()
     seed_everything(args.seed)
     if args.run_path is None:
-        args.run_path = f'Dataset(animal10n_Model({args.theta_r}_{args.theta_s})'
+        args.run_path = f'{args.title} Dataset(animal10n_Model({args.theta_r}_{args.theta_s})'
 
     os.environ['CUDA_VISIBLE_DEVICES'] = args.gpuid
     global logger
