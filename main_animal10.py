@@ -302,8 +302,8 @@ def main():
         else:
             scheduler.step()
 
-        if args.decrease_knn_k_enable == True:
-            knn_k = get_current_knn_k(args.k, i, args.knn_k_decrease_rate, args.min_knn_k)
+        if args.decrease_knn_k_enable == True and (i >= args.window_size):
+            knn_k = get_current_knn_k(args.k, (1 + i - args.window_size), args.knn_k_decrease_rate, args.min_knn_k)
 
         logger.log({'knn_k': knn_k, 'clean samples': len(clean_subset), 'lr': optimizer.param_groups[0]["lr"],  'relabeled samples': len(relabel_ids)})
         if cur_acc > best_acc:
