@@ -41,6 +41,7 @@ parser.add_argument('--gpuid',          default='0', type=str, help='Selected GP
 parser.add_argument('--entity', type=str, help='Wandb user entity')
 parser.add_argument('--run_path', type=str, help='run path containing all results')
 parser.add_argument('--extend_clean_knn_samples_enable',     default=True, type=bool,  help='extend_clean_knn_samples_enable')
+parser.add_argument('--relabeling_enable', type=bool,        default=True, help='relabeling_enable')
 parser.add_argument('--decrease_knn_k_enable', type=bool,    default=True, help='decrease_knn_k_enable')
 parser.add_argument('--knn_k_decrease_rate', type=float,     default=1.002, help='knn_k_decrease_rate')
 parser.add_argument('--min_knn_k', type=int,                 default=50, help='min_knn_k')
@@ -147,7 +148,7 @@ def evaluate(dataloader, encoder, classifier, args, human_labels, knn_k,
         modified_label, modified_score, changed_id = relabel_sample(
                                         prediction_cls, human_labels, args,
                                         model_prediction_score_window,
-                                        human_labels_score_window,)
+                                        human_labels_score_window)
         
         relabeled_human_labels_score_window.enqueue(modified_score)
         ################################### sample selection ###################################
