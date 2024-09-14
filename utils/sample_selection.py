@@ -10,8 +10,8 @@ def select_extended_samples(
 
     if args.extended_sampleing_strategy == ExtendedSampleingStrategy.RELABELD_CONFIDENCE:
         return select_sample_based_on_modified_labales_confidence(feature_bank, modified_labels, args, knn_k, relabeled_human_labels_score_window, logger)
-    elif args.relabeling_strategy == RelabelingStrategy.SAMPLE_STABLE
-        return select_sample_based_on_sample_stable(feature_bank, modified_labels, args, knn_k, sample_pred_label_window, logger):
+    elif args.relabeling_strategy == RelabelingStrategy.SAMPLE_STABLE:
+        return select_sample_based_on_sample_stable(feature_bank, modified_labels, args, knn_k, sample_pred_label_window, logger)
     
     raise Exception("sampling strategy is not exist")
 

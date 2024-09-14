@@ -129,7 +129,8 @@ def test(testloader, encoder, classifier, epoch):
 def evaluate(dataloader, encoder, classifier, args, human_labels, knn_k,
     model_prediction_score_window,
     human_labels_score_window,
-    relabeled_human_labels_score_window
+    relabeled_human_labels_score_window,
+    sample_pred_label_window, logger
 ):
     encoder.eval()
     classifier.eval()

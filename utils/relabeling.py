@@ -16,7 +16,7 @@ def relabel_sample(
             model_prediction_score_window,
             human_labels_score_window,
         )
-    elif args.relabeling_strategy == RelabelingStrategy.SAMPLE_STABLE
+    elif args.relabeling_strategy == RelabelingStrategy.SAMPLE_STABLE:
         return relabel_samples_based_on_sample_stable(
             prediction_cls,
             human_labels,
