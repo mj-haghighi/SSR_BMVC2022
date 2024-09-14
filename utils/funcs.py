@@ -226,7 +226,30 @@ class FixedSizeQueue:
 
 class RelabelingStrategy:
     MODEL_CONFIDENCE = "model_confidence"
+    SAMPLE_STABLE = "sample_stable"
 
 
 class ExtendedSampleingStrategy:
     RELABELD_CONFIDENCE = "relabeld_confidence"
+    SAMPLE_STABLE = "sample_stable"
+
+
+def most_repetitive_item(tensor):
+    values, counts = torch.unique(tensor, return_counts=True)
+    idx = torch.argmax(counts)
+    value = values[idx]
+    count = counts[idx]
+    ratio = count / torch.sum(counts)
+    
+    return value, ratio 
+
+
+def calculate_stabelity_per_sample(sample_pred_label_window):
+    per_sample = torch.stack(sample_pred_label_window.items()) 
+    stabelity = torch.tensor(
+        [most_repetitive_item(per_sample[:, i]) for i in range(per_sample.size()[1])]
+    ).cuda()
+    assert stabelity.size(0) == 50000    
+    labels = stabelity[:, 0]
+    ratios = stabelity[:, 1]
+    return labels, ratios

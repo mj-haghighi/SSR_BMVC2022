@@ -46,8 +46,11 @@ parser.add_argument('--decrease_knn_k_enable', type=bool,    default=True, help=
 parser.add_argument('--knn_k_decrease_rate', type=float,     default=1.002, help='knn_k_decrease_rate')
 parser.add_argument('--min_knn_k', type=int,                 default=50, help='min_knn_k')
 parser.add_argument('--ca_warm_restarts_enabled', type=bool, default=False, help='ca_warm_restarts_enabled')
-parser.add_argument('--relabeling_strategy', type=str, default="model_confidence", help='relabeling_strategy')
-parser.add_argument('--extended_sampleing_strategy', type=str, default="relabeld_confidence", help='relabeling_strategy')
+parser.add_argument('--relabeling_strategy', type=str, default="sample_stable", help='relabeling_strategy')
+parser.add_argument('--extended_sampleing_strategy', type=str, default="sample_stable", help='relabeling_strategy')
+# parser.add_argument('--relabeling_strategy', type=str, default="model_confidence", help='relabeling_strategy')
+# parser.add_argument('--extended_sampleing_strategy', type=str, default="relabeld_confidence", help='relabeling_strategy')
+
 
 def train(labeled_trainloader, modified_label, all_trainloader, encoder, classifier, proj_head, pred_head, optimizer, epoch, args):
     encoder.train()
@@ -148,13 +151,16 @@ def evaluate(dataloader, encoder, classifier, args, human_labels, knn_k,
         modified_label, modified_score, changed_id = relabel_sample(
                                         prediction_cls, human_labels, args,
                                         model_prediction_score_window,
-                                        human_labels_score_window)
+                                        human_labels_score_window,
+                                        sample_pred_label_window, logger)
         
         relabeled_human_labels_score_window.enqueue(modified_score)
         ################################### sample selection ###################################
         clean_id, clean_id_extended, noisy_id = select_extended_samples(
             feature_bank, human_labels, modified_label, args, knn_k, 
-            human_labels_score_window, relabeled_human_labels_score_window )
+            human_labels_score_window,
+            relabeled_human_labels_score_window,
+            sample_pred_label_window, logger)
 
     return clean_id, clean_id_extended, noisy_id, modified_label, changed_id
 
@@ -170,6 +176,7 @@ def main():
     model_prediction_score_window = FixedSizeQueue(args.window_size)
     relabeled_human_labels_score_window = FixedSizeQueue(args.window_size)
     human_labels_score_window = FixedSizeQueue(args.window_size)
+    sample_pred_label_window = FixedSizeQueue(args.window_size)
 
     logger = wandb.init(project='animal10n', entity=args.entity, name=args.run_path)
     logger.config.update(args)
@@ -257,32 +264,20 @@ def main():
     for i in range(args.epochs):
         clean_id, clean_id_extended, noisy_id, modified_label, relabel_ids = evaluate(
             eval_loader, encoder, classifier, args, human_labels, knn_k,
-            model_prediction_score_window, human_labels_score_window, relabeled_human_labels_score_window)
+            model_prediction_score_window, human_labels_score_window, relabeled_human_labels_score_window, sample_pred_label_window, logger)
 
         if args.extend_clean_knn_samples_enable == True:
             union_set = torch.unique(torch.cat((clean_id, clean_id_extended)))
             number_of_extended_samples = len(union_set) - len(clean_id)
-            logger.log({'number_of_extended_samples': number_of_extended_samples,
-                        'number_of_union_set_samples': len(union_set),
-                        'number_of_extended_candidates': len(clean_id_extended)})
+            logger.log({'extended_samples': number_of_extended_samples,
+                        'union_set_samples': len(union_set),
+                        'extended_candidates': len(clean_id_extended)})
 
             clean_subset = Subset(train_data, union_set.cpu())
             sampler = ClassBalancedSampler(labels=modified_label[union_set], num_classes=args.num_classes)
         else:
             clean_subset = Subset(train_data, clean_id.cpu())
             sampler = ClassBalancedSampler(labels=modified_label[clean_id], num_classes=args.num_classes)
-
-        logger.log({
-            'model_prediction_score_window_mean_max': torch.max(torch.mean(torch.stack(model_prediction_score_window.items()), axis=0)).detach().cpu().item(),
-            'relabeled_human_labels_score_window_mean_max': torch.max(torch.mean(torch.stack(relabeled_human_labels_score_window.items()), axis=0)).detach().cpu().item(),
-            'human_labels_score_window_mean_max': torch.max(torch.mean(torch.stack(human_labels_score_window.items()), axis=0)).detach().cpu().item(),
-            'model_prediction_score_window_mean_min': torch.min(torch.mean(torch.stack(model_prediction_score_window.items()), axis=0)).detach().cpu().item(),
-            'relabeled_human_labels_score_window_mean_min': torch.min(torch.mean(torch.stack(relabeled_human_labels_score_window.items()), axis=0)).detach().cpu().item(),
-            'human_labels_score_window_mean_min': torch.min(torch.mean(torch.stack(human_labels_score_window.items()), axis=0)).detach().cpu().item(),
-            'model_prediction_score_window_len': len(model_prediction_score_window.items()),
-            'relabeled_human_labels_score_window_len': len(relabeled_human_labels_score_window.items()),
-            'human_labels_score_window_len': len(human_labels_score_window.items()),
-        })
 
 
         labeled_loader = torch.utils.data.DataLoader(clean_subset, batch_size=args.batch_size, sampler=sampler, num_workers=4, drop_last=True)
