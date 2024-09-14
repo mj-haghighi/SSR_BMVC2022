@@ -157,13 +157,13 @@ def evaluate(dataloader, encoder, classifier, args, human_labels, knn_k,
         
         relabeled_human_labels_score_window.enqueue(modified_score)
         ################################### sample selection ###################################
-        clean_id, clean_id_extended, noisy_id = select_extended_samples(
+        clean_id, clean_id_extended, exclude_id, noisy_id = select_extended_samples(
             feature_bank, human_labels, modified_label, args, knn_k, 
             human_labels_score_window,
             relabeled_human_labels_score_window,
             sample_pred_label_window, logger)
 
-    return clean_id, clean_id_extended, noisy_id, modified_label, changed_id
+    return clean_id, clean_id_extended, exclude_id, noisy_id, modified_label, changed_id
 
 
 def main():
@@ -263,16 +263,22 @@ def main():
 
     ################################ Training loop ###########################################
     for i in range(args.epochs):
-        clean_id, clean_id_extended, noisy_id, modified_label, relabel_ids = evaluate(
+        clean_id, clean_id_extended, exclude_id, noisy_id, modified_label, relabel_ids = evaluate(
             eval_loader, encoder, classifier, args, human_labels, knn_k,
             model_prediction_score_window, human_labels_score_window, relabeled_human_labels_score_window, sample_pred_label_window, logger)
 
         if args.extend_clean_knn_samples_enable == True:
-            union_set = torch.unique(torch.cat((clean_id, clean_id_extended)))
-            number_of_extended_samples = len(union_set) - len(clean_id)
-            logger.log({'extended_samples': number_of_extended_samples,
-                        'union_set_samples': len(union_set),
-                        'extended_candidates': len(clean_id_extended)})
+            mask = ~torch.isin(clean_id, exclude_id)
+            clean_id_filtered = clean_id[mask]
+            union_set = torch.unique(torch.cat((clean_id_filtered, clean_id_extended)))
+            number_of_extended_samples = len(union_set) - len(clean_id_filtered)
+            logger.log({
+                'extended_samples': number_of_extended_samples,
+                'union_set_samples': len(union_set),
+                'extended_candidates': len(clean_id_extended),
+                'excluded_candidates': len(exclude_id),
+                'knn_chosen_id': len(clean_id),
+            })
 
             clean_subset = Subset(train_data, union_set.cpu())
             sampler = ClassBalancedSampler(labels=modified_label[union_set], num_classes=args.num_classes)

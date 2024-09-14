@@ -24,6 +24,8 @@ def select_sample_based_on_modified_labales_confidence(feature_bank, labels, arg
     noisy_id = torch.where(right_score < args.theta_s)[0]
     
     clean_id_extended = torch.tensor([], dtype=torch.int64).cuda()
+    exclude_id = torch.tensor([], dtype=torch.int64).cuda()
+
     if len(relabeled_human_labels_score_window.items()) >= args.window_size:
         relabeled_human_labels_score_confidence = torch.mean(torch.stack(relabeled_human_labels_score_window.items()), axis=0)
         logger.log({
@@ -37,7 +39,7 @@ def select_sample_based_on_modified_labales_confidence(feature_bank, labels, arg
         max_confidence = torch.max(relabeled_human_labels_score_confidence).detach().cpu().item()
         clean_id_extended = torch.where(relabeled_human_labels_score_confidence >= (args.theta_ce * max_confidence))[0]
 
-    return clean_id, clean_id_extended, noisy_id
+    return clean_id, clean_id_extended, exclude_id, noisy_id
 
 
 def select_sample_based_on_sample_stable(feature_bank, labels, args, knn_k, sample_pred_label_window, logger):
@@ -49,6 +51,7 @@ def select_sample_based_on_sample_stable(feature_bank, labels, args, knn_k, samp
     noisy_id = torch.where(right_score < args.theta_s)[0]
     
     clean_id_extended = torch.tensor([], dtype=torch.int64).cuda()
+    exclude_id = torch.tensor([], dtype=torch.int64).cuda()
     if len(sample_pred_label_window.items()) >= args.window_size:
         stable_labels, ratios = calculate_stabelity_per_sample(sample_pred_label_window)
 
@@ -62,5 +65,6 @@ def select_sample_based_on_sample_stable(feature_bank, labels, args, knn_k, samp
         })
 
         clean_id_extended = torch.where(ratios >= (args.theta_ce * torch.max(ratios).detach().item()))[0]
+        exclude_id = torch.where(ratios <= (args.theta_ex))[0]
 
-    return clean_id, clean_id_extended, noisy_id
+    return clean_id, clean_id_extended, exclude_id, noisy_id
